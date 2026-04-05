@@ -5,6 +5,7 @@
 
 typedef struct ClockTime {
   uint32_t epochUtc;  // single source of truth
+  bool isAvailable;
 } ClockTime;
 
 typedef struct LocalTime {
@@ -12,6 +13,7 @@ typedef struct LocalTime {
   uint8_t month, day, hour, minute;
   bool isDst;
   int16_t offsetMinutes;
+  bool isAvailable;
 } LocalTime;
 
 typedef struct DisplayTime {

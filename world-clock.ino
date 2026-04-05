@@ -1,10 +1,23 @@
 #include <Arduino.h>
 
 #define SUPPORT_DS3231
+//#define SUPPORT_DS3232
+#define SUPPORT_ROTARY_ENCODER
 
-#ifdef SUPPORT_DS3231
+#if defined(SUPPORT_DS3231) && defined(SUPPORT_DS3232)
+#error "Only one of SUPPORT_DS3231 or SUPPORT_DS3232 may be defined"
+#endif
+
+#if defined(SUPPORT_DS3231) || defined(SUPPORT_DS3232)
+#define RTC_SUPPORT
+#endif
+
+#ifdef RTC_SUPPORT
 #include <Wire.h>
 #include <I2C_RTC.h>
+#endif
+#ifdef SUPPORT_ROTARY_ENCODER
+#include <RotaryEncoder.h>
 #endif
 #include <WiFi.h>
 #include <time.h>
@@ -21,10 +34,13 @@
 #include "display.h"
 #include "convert.h"
 #include "types.h"
+#include "mode.h"
+
+#define SNTP_SYNC_INTERVAL    60000  // 60 seconds
 
 /* Interval definitions */
 #define INTERVAL_WIFI_CONNECT  5000
-#define INTERVAL_DISPLAY       1000
+#define INTERVAL_DISPLAY        100
 
 /* ESP32-WROOM-32 I2C Pins
 
@@ -44,19 +60,18 @@
 
     MCU          | Device
     -------------+---------------------
-    SDA  GPIO 21 | DS3231  SDA
-    SCL  GPIO 22 | DS3231  SCL
-
+    SDA  GPIO 21 | DS3231  SDA        7
+    SCL  GPIO 22 | DS3231  SCL        8
+         GPIO 27 | DS3231  INT/SQW    9
          GPIO 13 | DISPLAY 1 CLK
          GPIO 14 | DISPLAY 1 DIO
-         GPIO 15 | DISPLAY 2 CLK
-         GPIO 16 | DISPLAY 2 DIO
-         GPIO 17 | DISPLAY 3 CLK
-         GPIO 18 | DISPLAY 3 DIO
-
-    MISO GPIO 19 | BME280  SDO        5
-    MOSI GPIO 23 | BME280  SDI        3
-    CS   GPIO  5 | BME280  CSB        2
+         GPIO 16 | DISPLAY 2 CLK
+         GPIO 17 | DISPLAY 2 DIO
+         GPIO 18 | DISPLAY 3 CLK
+         GPIO 19 | DISPLAY 3 DIO
+         GPIO 23 | Rotary  CLK
+         GPIO 25 | Rotary  DIO
+         GPIO 26 | Rotary  SW
 
 
   ESP32 WROOM 32UE N4
@@ -64,24 +79,31 @@
 
     MCU               | Device
     ------------------+---------------------
-    MOSI GPIO 13 (20) | DOGS102 SDA/SI    24
-    SCKL GPIO 14 (17) | DOGS102 SCK/SCL   25
-    CS   GPIO 15 (21) | DOGS102 CS0/CS    28
-         GPIO 16 (25) | DOGS102 CD/A0     26
-         GPIO 17 (27) | DOGS102 RST/RESET 27
-    MOSI GPIO 23 (36) | BME280  SDI        3
-    MISO GPIO 19 (38) | BME280  SDO        5
-    SCKL GPIO 18 (35) | BME280  SCK        4
-    CS   GPIO  5 (34) | BME280  CSB        2
+    SDA  GPIO 21 | DS3231  SDA        7
+    SCL  GPIO 22 | DS3231  SCL        8
+         GPIO 27 | DS3231  INT/SQW    9
+         GPIO 13 | DISPLAY 1 CLK
+         GPIO 14 | DISPLAY 1 DIO
+         GPIO 16 | DISPLAY 2 CLK
+         GPIO 17 | DISPLAY 2 DIO
+         GPIO 18 | DISPLAY 3 CLK
+         GPIO 19 | DISPLAY 3 DIO
+         GPIO 23 | Rotary  CLK
+         GPIO 25 | Rotary  DIO
+         GPIO 26 | Rotary  SW
 
 */
 
 #define PIN_DISPLAY_1_CLK 13
 #define PIN_DISPLAY_1_DIO 14
-#define PIN_DISPLAY_2_CLK 15
-#define PIN_DISPLAY_2_DIO 16
-#define PIN_DISPLAY_3_CLK 17
-#define PIN_DISPLAY_3_DIO 18
+#define PIN_DISPLAY_2_CLK 16
+#define PIN_DISPLAY_2_DIO 17
+#define PIN_DISPLAY_3_CLK 18
+#define PIN_DISPLAY_3_DIO 19
+
+#define PIN_ROTARY_CLK    23
+#define PIN_ROTARY_DT     25
+#define PIN_ROTARY_SW     26
 
 /* Serial Speed (if undefined no serial output will be generated) */
 #define SERIAL_BAUD 115200
@@ -90,6 +112,13 @@
 #ifdef SERIAL_BAUD
 #include "serialdebug.h"
 #endif
+
+// use FOUR3 mode when CLK, DT signals are always HIGH in latch position.
+// use FOUR0 mode when CLK, DT signals are always LOW in latch position.
+// use TWO03 mode when CLK, DT signals are both LOW or HIGH in latch position.
+#define ENCODER_LATCH_MODE RotaryEncoder::LatchMode::FOUR3
+
+#define ENCODER_SW_DEBOUNCE_MS 25
 
 /* WiFi instances */
 WiFiClient wificlient;
@@ -102,6 +131,22 @@ WiFiClient wificlient;
 /* RTC instance */
 static DS3231 rtc;
 #endif
+#ifdef SUPPORT_DS3232
+/* RTC instance */
+static DS3232 rtc;
+#endif
+
+/* Current operating mode */
+static Mode currentMode = Mode::ShowHourMinutes;
+
+#ifdef SUPPORT_ROTARY_ENCODER
+static RotaryEncoder *rotaryencoder = nullptr;
+static int encoderPosition = 0, lastReportedPosition = 0;
+static bool buttonRawState = HIGH;
+static bool buttonStableState = HIGH;
+static unsigned long buttonLastChangeMs = 0;
+static uint8_t brightness = 7, lastReportedBrightness = 7;
+#endif
 
 /* Display instances */
 Display display_1(PIN_DISPLAY_1_CLK, PIN_DISPLAY_1_DIO);
@@ -110,60 +155,129 @@ Display display_3(PIN_DISPLAY_3_CLK, PIN_DISPLAY_3_DIO);
 
 /* Time instances */
 ClockTime currentTime;
+LocalTime icelandLocalTime;
+LocalTime houstonLocalTime;
+LocalTime bangkokLocalTime;
 
 /* General global variables */
 unsigned long current;
 unsigned int wifi_status = CONNECTION_STATUS_UNKNOWN;
 
+#ifdef SUPPORT_ROTARY_ENCODER
+IRAM_ATTR void encoderPositionChanged();
+#endif
+
 /* SNTP callback function */
 static void time_sync_available(struct timeval *tv);
+static void initialize_sntp_if_needed();
+
+static bool is_rtc_available = false;
+static bool is_sntp_initialized = false;
 
 void setup() {
   /* Initalize general global variables */
   current = 0;
 
+  currentTime.epochUtc = 0;
+  currentTime.isAvailable = false;
+
 #ifdef SERIAL_BAUD
   serial_debug_initiate(SERIAL_BAUD);
 #endif
 
-  /* Initialize the RTC */
-#ifdef SUPPORT_DS3231
-  rtc.begin();
+  /* Initialize the displays */
+  display_1.initiate();
+  display_2.initiate();
+  display_3.initiate();
 
+  /* Initialize the RTC */
+#ifdef RTC_SUPPORT
+  rtc.begin();
   if(rtc.isConnected()) {
-    time_t now = rtc.getEpoch();
+    if (!rtc.isRunning()) {
+#ifdef SERIAL_BAUD
+      serial_debug_rtc_not_running();
+#endif
+      rtc.startClock();
+    }
+    is_rtc_available = true;
+    currentTime.epochUtc = rtc.getEpoch();
+    currentTime.isAvailable = true;
   } else {
+#ifdef SERIAL_BAUD
+      serial_debug_rtc_not_connected();
+#endif
   }
 #endif
 
-  /* Set SNTP callback function */
-  sntp_set_time_sync_notification_cb(time_sync_available);
-  /* Use DHCP to get the NTP server */
-  sntp_servermode_dhcp(1);
-  /* Initialize the SNTP client */
-  configTime(0, 0, NTP_SERVER_1, NTP_SERVER_2);
+#ifdef SUPPORT_ROTARY_ENCODER
+  rotaryencoder = new RotaryEncoder(PIN_ROTARY_CLK, PIN_ROTARY_DT);
+  rotaryencoder->setPosition(brightness);
+  pinMode(PIN_ROTARY_SW, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(PIN_ROTARY_CLK), encoderPositionChanged, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN_ROTARY_DT), encoderPositionChanged, CHANGE);
+#endif
 
   /* Initalize the WiFi connection */
 #ifdef SERIAL_BAUD
   serial_debug_wifi_connecting();
 #endif
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while(WiFi.status() != WL_CONNECTED) {
-    delay(500);
-#ifdef SERIAL_BAUD
-    Serial.print(".");
-#endif
-  }
-  wifi_status = CONNECTION_STATUS_CONNECTED;
 
+  // Do not block startup waiting for WiFi; loop() will maintain reconnect attempts.
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  if (WiFi.status() == WL_CONNECTED) {
+    wifi_status = CONNECTION_STATUS_CONNECTED;
+    initialize_sntp_if_needed();
 #ifdef SERIAL_BAUD
-  serial_debug_wifi_connection_success(WiFi.localIP());
+    serial_debug_wifi_connection_success(WiFi.localIP());
 #endif
+  } else {
+    wifi_status = CONNECTION_STATUS_DISCONNECTED;
+  }
 
 }
 
 void loop() {
   current = millis();
+
+  /* Sample the rotary encoder push button and debounce it */
+#ifdef SUPPORT_ROTARY_ENCODER
+  int buttonSample = digitalRead(PIN_ROTARY_SW);
+  if (buttonSample != buttonRawState) {
+    buttonRawState = buttonSample;
+    buttonLastChangeMs = millis();
+  }
+  if ((millis() - buttonLastChangeMs) >= ENCODER_SW_DEBOUNCE_MS && buttonStableState != buttonRawState) {
+    buttonStableState = buttonRawState;
+
+    if (buttonStableState == LOW) {
+      currentMode = static_cast<Mode>((currentMode + 1) % ModeCount);
+      serial_debug_mode_changed(currentMode);
+    }
+  }
+
+  switch(currentMode) {
+    case SetBrightness: {
+      int rawPosition = rotaryencoder->getPosition();
+      brightness = static_cast<uint8_t>(constrain(rawPosition, 0, 7));
+      // Force encoder position back into valid range if it went out of bounds
+      if (rawPosition != static_cast<int>(brightness)) {
+        rotaryencoder->setPosition(brightness);
+      }
+      if (brightness != lastReportedBrightness) {
+        lastReportedBrightness = brightness;
+#ifdef SERIAL_BAUD
+        serial_debug_brightness_changed(brightness);
+#endif
+        display_1.setBrightness(brightness);
+        display_2.setBrightness(brightness);
+        display_3.setBrightness(brightness);
+      }
+      break;
+    }
+  }
+#endif
 
   /* Maintain the WiFi connection */
   if (WiFi.status() == WL_CONNECTED) {
@@ -173,6 +287,7 @@ void loop() {
 #endif
       wifi_status = CONNECTION_STATUS_CONNECTED;
     }
+    initialize_sntp_if_needed();
   } else {
     if (wifi_status == CONNECTION_STATUS_CONNECTED) {
 #ifdef SERIAL_BAUD
@@ -188,8 +303,118 @@ void loop() {
       WiFi.reconnect();
     }
   }
+
+  /* Update the Displays */
+  if (tick_display.is(current)) {
+
+    switch(currentMode) {
+      case ShowHourMinutes:
+        /* Read the current time from the RTC if available */
+#ifdef RTC_SUPPORT
+        if (is_rtc_available) {
+          currentTime.epochUtc = rtc.getEpoch();
+          currentTime.isAvailable = true;
+        }
+#endif
+
+        if (currentTime.isAvailable) {
+          icelandLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_ICELAND);
+          houstonLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_HOUSTON);
+          bangkokLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_BANGKOK);
+          display_1.showTime(houstonLocalTime);
+          display_2.showTime(bangkokLocalTime);
+          display_3.showTime(icelandLocalTime);
+        } else {
+          display_1.showUnavailable();
+          display_2.showUnavailable();
+          display_3.showUnavailable();
+        }
+        break;
+
+      case ShowDate:
+        /* Read the current time from the RTC if available */
+#ifdef RTC_SUPPORT
+        if (is_rtc_available) {
+          currentTime.epochUtc = rtc.getEpoch();
+          currentTime.isAvailable = true;
+        }
+#endif
+
+        if (currentTime.isAvailable) {
+          icelandLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_ICELAND);
+          houstonLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_HOUSTON);
+          bangkokLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_BANGKOK);
+          display_1.showDate(houstonLocalTime);
+          display_2.showDate(bangkokLocalTime);
+          display_3.showDate(icelandLocalTime);
+        } else {
+          display_1.showUnavailable();
+          display_2.showUnavailable();
+          display_3.showUnavailable();
+        }
+        break;
+
+      case SetBrightness:
+        display_1.showBrightness(brightness);
+
+#ifdef RTC_SUPPORT
+        if (is_rtc_available) {
+          currentTime.epochUtc = rtc.getEpoch();
+          currentTime.isAvailable = true;
+        }
+#endif
+
+        if (currentTime.isAvailable) {
+          icelandLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_ICELAND);
+          bangkokLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_BANGKOK);
+          display_2.showTime(bangkokLocalTime);
+          display_3.showTime(icelandLocalTime);
+        } else {
+          display_2.showUnavailable();
+          display_3.showUnavailable();
+        }
+        break;
+
+      default:
+        break;
+    }
+  }
 }
 
+static void initialize_sntp_if_needed() {
+  if (is_sntp_initialized) {
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  sntp_set_time_sync_notification_cb(time_sync_available);
+  sntp_servermode_dhcp(1);
+  sntp_set_sync_interval(SNTP_SYNC_INTERVAL);
+  configTime(0, 0, NTP_SERVER_1, NTP_SERVER_2);
+  is_sntp_initialized = true;
+}
+
+#ifdef SUPPORT_ROTARY_ENCODER
+IRAM_ATTR void encoderPositionChanged() {
+  rotaryencoder->tick();
+}
+#endif
+
 void time_sync_available(struct timeval *tv) {
-  Serial.println("Got time adjustment from NTP!");
+  if (tv != nullptr) {
+    currentTime.epochUtc = tv->tv_sec;
+    currentTime.isAvailable = true;
+
+#ifdef RTC_SUPPORT
+    if (is_rtc_available) {
+      rtc.setEpoch(currentTime.epochUtc);
+    }
+#endif
+#ifdef SERIAL_BAUD
+    serial_debug_time_synced(currentTime);
+#endif
+  }
 }
