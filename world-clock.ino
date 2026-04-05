@@ -171,6 +171,9 @@ static void initialize_sntp_if_needed();
 static bool is_rtc_available = false;
 static bool is_sntp_initialized = false;
 
+/* One-time initialization: serial debug output, TM1637 displays, I2C RTC,
+   rotary encoder with interrupts, and non-blocking WiFi connect.
+   SNTP is started lazily in loop() once WiFi is confirmed connected. */
 void setup() {
   /* Initalize general global variables */
   current = 0;
@@ -235,6 +238,12 @@ void setup() {
 
 }
 
+/* Main loop, called repeatedly by the Arduino runtime.
+   Responsibilities (in order):
+     1. Debounce the rotary encoder push button and advance the display mode on press.
+     2. Read the encoder value and apply it to the active setting (brightness / alarm).
+     3. Monitor WiFi and trigger reconnect attempts on a timed interval.
+     4. Refresh the three TM1637 displays on a 100 ms tick. */
 void loop() {
   current = millis();
 
@@ -412,6 +421,9 @@ void loop() {
   }
 }
 
+/* Configures and starts SNTP time synchronization against the configured NTP servers.
+   Idempotent — safe to call on every loop iteration; exits immediately after the
+   first successful initialization. WiFi must be connected before calling. */
 static void initialize_sntp_if_needed() {
   if (is_sntp_initialized) {
     return;
@@ -428,12 +440,18 @@ static void initialize_sntp_if_needed() {
   is_sntp_initialized = true;
 }
 
+/* Interrupt Service Routine: fires on any CHANGE edge of the encoder CLK or DT pins.
+   Must stay minimal — only forward the signal to the library's tick handler.
+   IRAM_ATTR ensures the function is placed in IRAM so it is reachable during a cache miss. */
 #ifdef SUPPORT_ROTARY_ENCODER
 IRAM_ATTR void encoderPositionChanged() {
   rotaryencoder->tick();
 }
 #endif
 
+/* SNTP callback: invoked by the ESP32 SNTP library when a new time is received from an
+   NTP server. Updates the global epoch and writes the new time back to the RTC so that
+   the RTC stays accurate even across reboots without network access. */
 void time_sync_available(struct timeval *tv) {
   if (tv != nullptr) {
     currentTime.epochUtc = tv->tv_sec;
