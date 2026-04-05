@@ -70,6 +70,21 @@ void Display::showDate(const LocalTime &time) {
   instance.setSegments(segments, DISPLAY_NUMBER_OF_DIGITS, 0);
 }
 
+void Display::showAlarm(uint8_t hour, uint8_t minute) {
+  uint8_t digits[DISPLAY_NUMBER_OF_DIGITS];
+  uint8_t segments[DISPLAY_NUMBER_OF_DIGITS];
+  formatAlarmDigits(digits, hour, minute);
+
+  for (uint8_t i = 0; i < DISPLAY_NUMBER_OF_DIGITS; i++) {
+    segments[i] = instance.encodeCharacter(static_cast<char>('0' + digits[i]));
+  }
+
+  // Keep the center separator on to visually split HH and MM.
+  segments[1] |= DISPLAY_COLON_SEGMENT_MASK;
+
+  instance.setSegments(segments, DISPLAY_NUMBER_OF_DIGITS, 0);
+}
+
 void Display::showBrightness(uint8_t brightness) {
   const uint8_t safeBrightness = brightness > DISPLAY_BRIGHTNESS ? DISPLAY_BRIGHTNESS : brightness;
 

@@ -146,6 +146,7 @@ static bool buttonRawState = HIGH;
 static bool buttonStableState = HIGH;
 static unsigned long buttonLastChangeMs = 0;
 static uint8_t brightness = 7, lastReportedBrightness = 7;
+static uint8_t alarmHour = 7, alarmMinute = 0, lastReportedAlarmHour = 7, lastReportedAlarmMinute = 0;
 #endif
 
 /* Display instances */
@@ -254,6 +255,14 @@ void loop() {
     if (buttonStableState == LOW) {
       currentMode = static_cast<Mode>((currentMode + 1) % ModeCount);
       serial_debug_mode_changed(currentMode);
+      // Initialize encoder position for new mode
+      if (currentMode == SetBrightness) {
+        rotaryencoder->setPosition(brightness);
+      } else if (currentMode == SetAlarmHour) {
+        rotaryencoder->setPosition(alarmHour);
+      } else if (currentMode == SetAlarmMinute) {
+        rotaryencoder->setPosition(alarmMinute);
+      }
     }
   }
 
@@ -273,6 +282,36 @@ void loop() {
         display_1.setBrightness(brightness);
         display_2.setBrightness(brightness);
         display_3.setBrightness(brightness);
+      }
+      break;
+    }
+
+    case SetAlarmHour: {
+      int rawPosition = rotaryencoder->getPosition();
+      alarmHour = static_cast<uint8_t>(constrain(rawPosition, 0, 23));
+      if (rawPosition != static_cast<int>(alarmHour)) {
+        rotaryencoder->setPosition(alarmHour);
+      }
+      if (alarmHour != lastReportedAlarmHour) {
+        lastReportedAlarmHour = alarmHour;
+#ifdef SERIAL_BAUD
+        serial_debug_alarm_changed(alarmHour, alarmMinute);
+#endif
+      }
+      break;
+    }
+
+    case SetAlarmMinute: {
+      int rawPosition = rotaryencoder->getPosition();
+      alarmMinute = static_cast<uint8_t>(constrain(rawPosition, 0, 59));
+      if (rawPosition != static_cast<int>(alarmMinute)) {
+        rotaryencoder->setPosition(alarmMinute);
+      }
+      if (alarmMinute != lastReportedAlarmMinute) {
+        lastReportedAlarmMinute = alarmMinute;
+#ifdef SERIAL_BAUD
+        serial_debug_alarm_changed(alarmHour, alarmMinute);
+#endif
       }
       break;
     }
@@ -354,25 +393,19 @@ void loop() {
         }
         break;
 
+      case SetAlarmHour:
+      case SetAlarmMinute:
+        display_1.showAlarm(alarmHour, alarmMinute);
+        // Indicate that alarm is being set on displays 2 and 3
+        display_2.showUnavailable();
+        display_3.showUnavailable();
+        break;
+
       case SetBrightness:
         display_1.showBrightness(brightness);
-
-#ifdef RTC_SUPPORT
-        if (is_rtc_available) {
-          currentTime.epochUtc = rtc.getEpoch();
-          currentTime.isAvailable = true;
-        }
-#endif
-
-        if (currentTime.isAvailable) {
-          icelandLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_ICELAND);
-          bangkokLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_BANGKOK);
-          display_2.showTime(bangkokLocalTime);
-          display_3.showTime(icelandLocalTime);
-        } else {
-          display_2.showUnavailable();
-          display_3.showUnavailable();
-        }
+        // Indicate that brightness is being set on displays 2 and 3
+        display_2.showUnavailable();
+        display_3.showUnavailable();
         break;
 
       default:

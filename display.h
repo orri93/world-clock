@@ -18,6 +18,7 @@ class Display {
     void showUnavailable();
     void showTime(const LocalTime &time);
     void showDate(const LocalTime &time);
+    void showAlarm(uint8_t hour, uint8_t minute);
     void showBrightness(uint8_t brightness);
 
   private:

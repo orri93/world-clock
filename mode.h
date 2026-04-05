@@ -4,7 +4,8 @@
 enum Mode {
   ShowHourMinutes,
   ShowDate,
-  SetAlarm,
+  SetAlarmHour,
+  SetAlarmMinute,
   SetBrightness,
   ModeCount
 };

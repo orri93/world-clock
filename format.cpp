@@ -17,3 +17,12 @@ void formatDateDigits(uint8_t *digits, const LocalTime &time) {
     digits[3] = time.day % 10;
   }
 }
+
+void formatAlarmDigits(uint8_t *digits, uint8_t hour, uint8_t minute) {
+  if (digits != nullptr) {
+    digits[0] = hour / 10;
+    digits[1] = hour % 10;
+    digits[2] = minute / 10;
+    digits[3] = minute % 10;
+  }
+}

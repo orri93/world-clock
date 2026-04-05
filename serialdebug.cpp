@@ -53,8 +53,11 @@ void serial_debug_mode_changed(Mode mode) {
     case ShowDate:
       Serial.println("Show Date");
       break;
-    case SetAlarm:
-      Serial.println("Set Alarm");
+    case SetAlarmHour:
+      Serial.println("Set Alarm Hour");
+      break;
+    case SetAlarmMinute:
+      Serial.println("Set Alarm Minute");
       break;
     case SetBrightness:
       Serial.println("Set Brightness");
@@ -68,4 +71,13 @@ void serial_debug_mode_changed(Mode mode) {
 void serial_debug_brightness_changed(uint8_t brightness) {
   Serial.print("Brightness changed to: ");
   Serial.println(brightness);
+}
+
+void serial_debug_alarm_changed(uint8_t hour, uint8_t minute) {
+  Serial.print("Alarm set to: ");
+  if (hour < 10) Serial.print("0");
+  Serial.print(hour);
+  Serial.print(":");
+  if (minute < 10) Serial.print("0");
+  Serial.println(minute);
 }
