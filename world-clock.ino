@@ -3,6 +3,7 @@
 #define SUPPORT_DS3231
 //#define SUPPORT_DS3232
 #define SUPPORT_ROTARY_ENCODER
+#define SUPPORT_WEB_INTERFACE
 
 #if defined(SUPPORT_DS3231) && defined(SUPPORT_DS3232)
 #error "Only one of SUPPORT_DS3231 or SUPPORT_DS3232 may be defined"
@@ -35,6 +36,9 @@
 #include "convert.h"
 #include "types.h"
 #include "mode.h"
+#ifdef SUPPORT_WEB_INTERFACE
+#include "webinterface.h"
+#endif
 
 #define SNTP_SYNC_INTERVAL    60000  // 60 seconds
 
@@ -136,13 +140,16 @@ static DS3232 rtc;
 /* Current operating mode */
 static Mode currentMode = Mode::ShowHourMinutes;
 
+/* Brightness and alarm are device-wide settings accessible by both the
+   rotary encoder and the web interface (whichever features are enabled). */
+static uint8_t brightness = 7, lastReportedBrightness = 7;
+static uint8_t alarmHour = 7, alarmMinute = 0, lastReportedAlarmHour = 7, lastReportedAlarmMinute = 0;
+
 #ifdef SUPPORT_ROTARY_ENCODER
 static RotaryEncoder *rotaryencoder = nullptr;
 static bool buttonRawState = HIGH;
 static bool buttonStableState = HIGH;
 static unsigned long buttonLastChangeMs = 0;
-static uint8_t brightness = 7, lastReportedBrightness = 7;
-static uint8_t alarmHour = 7, alarmMinute = 0, lastReportedAlarmHour = 7, lastReportedAlarmMinute = 0;
 #endif
 
 /* Display instances */
@@ -236,16 +243,31 @@ void setup() {
     wifi_status = CONNECTION_STATUS_DISCONNECTED;
   }
 
+  /* Start the HTTP web interface (listens on port 80). */
+#ifdef SUPPORT_WEB_INTERFACE
+  webinterface_initiate(
+    &currentTime,
+    &icelandLocalTime, &houstonLocalTime, &bangkokLocalTime,
+    &alarmHour, &alarmMinute,
+    &brightness,
+    &display_1, &display_2, &display_3);
+#endif
+
 }
 
 /* Main loop, called repeatedly by the Arduino runtime.
    Responsibilities (in order):
-     1. Debounce the rotary encoder push button and advance the display mode on press.
-     2. Read the encoder value and apply it to the active setting (brightness / alarm).
-     3. Monitor WiFi and trigger reconnect attempts on a timed interval.
-     4. Refresh the three TM1637 displays on a 100 ms tick. */
+     1. Process any pending HTTP requests from the web interface.
+     2. Debounce the rotary encoder push button and advance the display mode on press.
+     3. Read the encoder value and apply it to the active setting (brightness / alarm).
+     4. Monitor WiFi and trigger reconnect attempts on a timed interval.
+     5. Refresh the three TM1637 displays on a 100 ms tick. */
 void loop() {
   current = millis();
+
+#ifdef SUPPORT_WEB_INTERFACE
+  webinterface_handle();
+#endif
 
   /* Sample the rotary encoder push button and debounce it */
 #ifdef SUPPORT_ROTARY_ENCODER
