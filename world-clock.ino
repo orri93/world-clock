@@ -120,9 +120,6 @@
 
 #define ENCODER_SW_DEBOUNCE_MS 25
 
-/* WiFi instances */
-WiFiClient wificlient;
-
 /* Tick instances */
 ::gos::atl::Tick<> tick_wifi_connect(INTERVAL_WIFI_CONNECT);
 ::gos::atl::Tick<> tick_display(INTERVAL_DISPLAY);
@@ -141,7 +138,6 @@ static Mode currentMode = Mode::ShowHourMinutes;
 
 #ifdef SUPPORT_ROTARY_ENCODER
 static RotaryEncoder *rotaryencoder = nullptr;
-static int encoderPosition = 0, lastReportedPosition = 0;
 static bool buttonRawState = HIGH;
 static bool buttonStableState = HIGH;
 static unsigned long buttonLastChangeMs = 0;
@@ -254,7 +250,9 @@ void loop() {
 
     if (buttonStableState == LOW) {
       currentMode = static_cast<Mode>((currentMode + 1) % ModeCount);
+#ifdef SERIAL_BAUD
       serial_debug_mode_changed(currentMode);
+#endif
       // Initialize encoder position for new mode
       if (currentMode == SetBrightness) {
         rotaryencoder->setPosition(brightness);
@@ -336,7 +334,7 @@ void loop() {
     }
     if (tick_wifi_connect.is(current)) {
 #ifdef SERIAL_BAUD
-      serial_debug_wifi_lost_connection();
+      serial_debug_wifi_reconnecting();
 #endif
       WiFi.disconnect();
       WiFi.reconnect();

@@ -1,7 +1,4 @@
 #include "serialdebug.h"
-#include "secrets.h"
-
-static float v;
 
 void serial_debug_initiate(long baud) {
   Serial.begin(baud);
@@ -22,6 +19,10 @@ void serial_debug_wifi_connection_success(const IPAddress& ip) {
 
 void serial_debug_wifi_lost_connection() {
   Serial.println("Lost connection to WiFi, reconnecting...");
+}
+
+void serial_debug_wifi_reconnecting() {
+  Serial.println("WiFi still disconnected, retrying...");
 }
 
 void serial_debug_wifi_reestablished_connection(const IPAddress& ip) {
