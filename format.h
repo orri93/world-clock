@@ -12,4 +12,7 @@ void formatDateDigits(uint8_t *digits, const LocalTime &time);
 // Fill digits[4] with { H/10, H%10, M/10, M%10 } from the given hour and minute values.
 void formatAlarmDigits(uint8_t *digits, uint8_t hour, uint8_t minute);
 
+// Fill digits[4] with the decimal digits of a value clamped to 0-9999.
+void formatNumberDigits(uint8_t *digits, uint16_t value);
+
 #endif

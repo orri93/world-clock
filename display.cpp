@@ -98,13 +98,9 @@ void Display::showBrightness(uint8_t brightness) {
 }
 
 void Display::showNumber(uint16_t value) {
-  const uint16_t safeValue = value > 9999 ? 9999 : value;
   uint8_t digits[DISPLAY_NUMBER_OF_DIGITS];
   uint8_t segments[DISPLAY_NUMBER_OF_DIGITS];
-  digits[0] = static_cast<uint8_t>(safeValue / 1000);
-  digits[1] = static_cast<uint8_t>((safeValue / 100) % 10);
-  digits[2] = static_cast<uint8_t>((safeValue / 10) % 10);
-  digits[3] = static_cast<uint8_t>(safeValue % 10);
+  formatNumberDigits(digits, value);
 
   bool leadingSpace = true;
   for (uint8_t i = 0; i < DISPLAY_NUMBER_OF_DIGITS - 1; i++) {
