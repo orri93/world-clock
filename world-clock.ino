@@ -77,6 +77,8 @@
          GPIO 32 | Rotary  DIO
          GPIO 33 | Rotary  SW
          GPIO 25 | DAC Audio
+         GPIO 26 | Status LED
+         GPIO  4 | Error LED
 
 
   ESP32 WROOM 32UE N4
@@ -97,7 +99,8 @@
          GPIO 32 | Rotary  DIO
          GPIO 33 | Rotary  SW
          GPIO 25 | DAC Audio
-
+         GPIO 26 | Status LED
+         GPIO  4 | Error LED
 */
 
 /* TM1637 display pins */
@@ -115,6 +118,10 @@
 
 /* DAC Audio output pin */
 #define PIN_DAC_AUDIO     25
+
+/* Status and error LED pins */
+#define PIN_STATUS_LED    26
+#define PIN_ERROR_LED     4
 
 /* Serial Speed (if undefined no serial output will be generated) */
 #define SERIAL_BAUD 115200
