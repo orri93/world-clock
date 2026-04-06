@@ -191,6 +191,13 @@ static void initialize_sntp_if_needed();
 
 static bool is_rtc_available = false;
 static bool is_sntp_initialized = false;
+static uint32_t wifi_reconnect_attempts = 0;
+
+/* Read RTC into currentTime when available. Returns true if time source is available. */
+static bool refresh_current_time_from_rtc();
+
+/* Convert UTC into all configured local timezones and render one of the two view modes. */
+static void render_time_or_date_mode(bool showDate);
 
 /* One-time initialization: serial debug output, TM1637 displays, I2C RTC,
    rotary encoder with interrupts, and non-blocking WiFi connect.
@@ -231,6 +238,27 @@ void setup() {
   }
 #endif
 
+#ifdef SERIAL_BAUD
+  serial_debug_startup_summary(
+#ifdef RTC_SUPPORT
+    true,
+#else
+    false,
+#endif
+    is_rtc_available,
+#ifdef SUPPORT_ROTARY_ENCODER
+    true,
+#else
+    false,
+#endif
+#ifdef SUPPORT_WEB_INTERFACE
+    true
+#else
+    false
+#endif
+  );
+#endif
+
 #ifdef SUPPORT_ROTARY_ENCODER
   rotaryencoder = new RotaryEncoder(PIN_ROTARY_CLK, PIN_ROTARY_DT);
   rotaryencoder->setPosition(brightness);
@@ -249,6 +277,7 @@ void setup() {
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   if (WiFi.status() == WL_CONNECTED) {
     wifi_status = CONNECTION_STATUS_CONNECTED;
+    wifi_reconnect_attempts = 0;
     initialize_sntp_if_needed();
 #ifdef SERIAL_BAUD
     serial_debug_wifi_connection_success(WiFi.localIP());
@@ -265,6 +294,9 @@ void setup() {
     &alarmHour, &alarmMinute,
     &brightness,
     &display_1, &display_2, &display_3);
+#ifdef SERIAL_BAUD
+  serial_debug_webinterface_started(80);
+#endif
 #endif
 
 }
@@ -368,6 +400,7 @@ void loop() {
       serial_debug_wifi_reestablished_connection(WiFi.localIP());
 #endif
       wifi_status = CONNECTION_STATUS_CONNECTED;
+      wifi_reconnect_attempts = 0;
     }
     initialize_sntp_if_needed();
   } else {
@@ -378,8 +411,9 @@ void loop() {
       wifi_status = CONNECTION_STATUS_DISCONNECTED;
     }
     if (tick_wifi_connect.is(current)) {
+      wifi_reconnect_attempts++;
 #ifdef SERIAL_BAUD
-      serial_debug_wifi_reconnecting();
+      serial_debug_wifi_reconnecting(wifi_reconnect_attempts, WiFi.status());
 #endif
       WiFi.disconnect();
       WiFi.reconnect();
@@ -391,49 +425,11 @@ void loop() {
 
     switch(currentMode) {
       case ShowHourMinutes:
-        /* Read the current time from the RTC if available */
-#ifdef RTC_SUPPORT
-        if (is_rtc_available) {
-          currentTime.epochUtc = rtc.getEpoch();
-          currentTime.isAvailable = true;
-        }
-#endif
-
-        if (currentTime.isAvailable) {
-          icelandLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_ICELAND);
-          houstonLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_HOUSTON);
-          bangkokLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_BANGKOK);
-          display_1.showTime(houstonLocalTime);
-          display_2.showTime(bangkokLocalTime);
-          display_3.showTime(icelandLocalTime);
-        } else {
-          display_1.showUnavailable();
-          display_2.showUnavailable();
-          display_3.showUnavailable();
-        }
+        render_time_or_date_mode(false);
         break;
 
       case ShowDate:
-        /* Read the current time from the RTC if available */
-#ifdef RTC_SUPPORT
-        if (is_rtc_available) {
-          currentTime.epochUtc = rtc.getEpoch();
-          currentTime.isAvailable = true;
-        }
-#endif
-
-        if (currentTime.isAvailable) {
-          icelandLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_ICELAND);
-          houstonLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_HOUSTON);
-          bangkokLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_BANGKOK);
-          display_1.showDate(houstonLocalTime);
-          display_2.showDate(bangkokLocalTime);
-          display_3.showDate(icelandLocalTime);
-        } else {
-          display_1.showUnavailable();
-          display_2.showUnavailable();
-          display_3.showUnavailable();
-        }
+        render_time_or_date_mode(true);
         break;
 
       case SetAlarmHour:
@@ -466,9 +462,15 @@ static void initialize_sntp_if_needed() {
   }
 
   if (WiFi.status() != WL_CONNECTED) {
+#ifdef SERIAL_BAUD
+    serial_debug_sntp_waiting_for_wifi();
+#endif
     return;
   }
 
+#ifdef SERIAL_BAUD
+  serial_debug_sntp_initializing(NTP_SERVER_1, NTP_SERVER_2, SNTP_SYNC_INTERVAL);
+#endif
   sntp_set_time_sync_notification_cb(time_sync_available);
   sntp_servermode_dhcp(1);
   sntp_set_sync_interval(SNTP_SYNC_INTERVAL);
@@ -501,5 +503,38 @@ void time_sync_available(struct timeval *tv) {
 #ifdef SERIAL_BAUD
     serial_debug_time_synced(currentTime);
 #endif
+  }
+}
+
+static bool refresh_current_time_from_rtc() {
+#ifdef RTC_SUPPORT
+  if (is_rtc_available) {
+    currentTime.epochUtc = rtc.getEpoch();
+    currentTime.isAvailable = true;
+  }
+#endif
+  return currentTime.isAvailable;
+}
+
+static void render_time_or_date_mode(bool showDate) {
+  if (!refresh_current_time_from_rtc()) {
+    display_1.showUnavailable();
+    display_2.showUnavailable();
+    display_3.showUnavailable();
+    return;
+  }
+
+  icelandLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_ICELAND);
+  houstonLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_HOUSTON);
+  bangkokLocalTime = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_BANGKOK);
+
+  if (showDate) {
+    display_1.showDate(houstonLocalTime);
+    display_2.showDate(bangkokLocalTime);
+    display_3.showDate(icelandLocalTime);
+  } else {
+    display_1.showTime(houstonLocalTime);
+    display_2.showTime(bangkokLocalTime);
+    display_3.showTime(icelandLocalTime);
   }
 }
