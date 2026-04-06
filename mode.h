@@ -7,6 +7,7 @@ enum Mode {
   SetAlarmHour,
   SetAlarmMinute,
   SetBrightness,
+  ShowWiFiStatus,
   ModeCount
 };
 

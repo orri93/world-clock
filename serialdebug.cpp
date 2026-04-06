@@ -133,6 +133,9 @@ void serial_debug_mode_changed(Mode mode) {
     case SetBrightness:
       Serial.println("Set Brightness");
       break;
+    case ShowWiFiStatus:
+      Serial.println("Show WiFi Status");
+      break;
     default:
       Serial.println("Unknown Mode");
       break;

@@ -36,6 +36,7 @@
 #include "convert.h"
 #include "types.h"
 #include "mode.h"
+#include "statusled.h"
 #ifdef SUPPORT_WEB_INTERFACE
 #include "webinterface.h"
 #endif
@@ -192,6 +193,8 @@ static void initialize_sntp_if_needed();
 static bool is_rtc_available = false;
 static bool is_sntp_initialized = false;
 static uint32_t wifi_reconnect_attempts = 0;
+static bool hardware_problem_detected = false;
+static unsigned long last_wifi_connect_attempt_ms = 0;
 
 /* Read RTC into currentTime when available. Returns true if time source is available. */
 static bool refresh_current_time_from_rtc();
@@ -213,6 +216,8 @@ void setup() {
   serial_debug_initiate(SERIAL_BAUD);
 #endif
 
+  status_led_begin(PIN_STATUS_LED, PIN_ERROR_LED);
+
   /* Initialize the displays */
   display_1.initiate();
   display_2.initiate();
@@ -232,6 +237,7 @@ void setup() {
     currentTime.epochUtc = rtc.getEpoch();
     currentTime.isAvailable = true;
   } else {
+    hardware_problem_detected = true;
 #ifdef SERIAL_BAUD
       serial_debug_rtc_not_connected();
 #endif
@@ -274,6 +280,7 @@ void setup() {
 
   // Do not block startup waiting for WiFi; loop() will maintain reconnect attempts.
   WiFi.mode(WIFI_STA);
+  last_wifi_connect_attempt_ms = millis();
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   if (WiFi.status() == WL_CONNECTED) {
     wifi_status = CONNECTION_STATUS_CONNECTED;
@@ -412,6 +419,7 @@ void loop() {
     }
     if (tick_wifi_connect.is(current)) {
       wifi_reconnect_attempts++;
+      last_wifi_connect_attempt_ms = current;
 #ifdef SERIAL_BAUD
       serial_debug_wifi_reconnecting(wifi_reconnect_attempts, WiFi.status());
 #endif
@@ -419,6 +427,12 @@ void loop() {
       WiFi.reconnect();
     }
   }
+
+  status_led_update(
+    current,
+    WiFi.status() == WL_CONNECTED,
+    hardware_problem_detected,
+    last_wifi_connect_attempt_ms);
 
   /* Update the Displays */
   if (tick_display.is(current)) {
@@ -445,6 +459,27 @@ void loop() {
         // Indicate that brightness is being set on displays 2 and 3
         display_2.showUnavailable();
         display_3.showUnavailable();
+        break;
+
+      case ShowWiFiStatus:
+        if (WiFi.status() == WL_CONNECTED) {
+          IPAddress ip = WiFi.localIP();
+          // Page through the four IP octets: page 0 shows octets 1-3, page 1 shows octet 4.
+          if ((millis() / 2000UL) % 2 == 0) {
+            display_1.showNumber(ip[0]);
+            display_2.showNumber(ip[1]);
+            display_3.showNumber(ip[2]);
+          } else {
+            display_1.showNumber(ip[3]);
+            display_2.showUnavailable();
+            display_3.showUnavailable();
+          }
+        } else {
+          // Show the raw wl_status_t code (0-6) on display 1 for troubleshooting.
+          display_1.showNumber(static_cast<uint16_t>(WiFi.status()));
+          display_2.showUnavailable();
+          display_3.showUnavailable();
+        }
         break;
 
       default:
@@ -538,3 +573,4 @@ static void render_time_or_date_mode(bool showDate) {
     display_3.showTime(icelandLocalTime);
   }
 }
+

@@ -34,6 +34,9 @@ class Display {
     // Show a two-digit brightness level (00-07) on the right two digits, left two digits blank.
     void showBrightness(uint8_t brightness);
 
+    // Show a decimal number (0-9999) right-aligned; unused leading positions show spaces.
+    void showNumber(uint16_t value);
+
   private:
     TM1637plus_modelX instance;
 };
