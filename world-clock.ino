@@ -74,8 +74,9 @@
          GPIO 18 | DISPLAY 3 CLK
          GPIO 19 | DISPLAY 3 DIO
          GPIO 23 | Rotary  CLK
-         GPIO 25 | Rotary  DIO
-         GPIO 26 | Rotary  SW
+         GPIO 32 | Rotary  DIO
+         GPIO 33 | Rotary  SW
+         GPIO 25 | DAC Audio
 
 
   ESP32 WROOM 32UE N4
@@ -93,11 +94,13 @@
          GPIO 18 | DISPLAY 3 CLK
          GPIO 19 | DISPLAY 3 DIO
          GPIO 23 | Rotary  CLK
-         GPIO 25 | Rotary  DIO
-         GPIO 26 | Rotary  SW
+         GPIO 32 | Rotary  DIO
+         GPIO 33 | Rotary  SW
+         GPIO 25 | DAC Audio
 
 */
 
+/* TM1637 display pins */
 #define PIN_DISPLAY_1_CLK 13
 #define PIN_DISPLAY_1_DIO 14
 #define PIN_DISPLAY_2_CLK 16
@@ -105,9 +108,13 @@
 #define PIN_DISPLAY_3_CLK 18
 #define PIN_DISPLAY_3_DIO 19
 
+/* Rotary encoder pins */
 #define PIN_ROTARY_CLK    23
-#define PIN_ROTARY_DT     25
-#define PIN_ROTARY_SW     26
+#define PIN_ROTARY_DT     32
+#define PIN_ROTARY_SW     33
+
+/* DAC Audio output pin */
+#define PIN_DAC_AUDIO     25
 
 /* Serial Speed (if undefined no serial output will be generated) */
 #define SERIAL_BAUD 115200
