@@ -26,5 +26,7 @@ void serial_debug_time_synced(const ClockTime& time);
 void serial_debug_mode_changed(Mode mode);
 void serial_debug_brightness_changed(uint8_t brightness);
 void serial_debug_alarm_changed(uint8_t hour, uint8_t minute);
+void serial_debug_alarm_sound_changed(uint8_t soundId);
+void serial_debug_alarm_triggered(uint8_t hour, uint8_t minute, uint8_t soundId);
 
 #endif /* SERIALDEBUG_H */

@@ -13,6 +13,7 @@
      GET  /               — HTML management page
      GET  /status         — JSON snapshot of times, alarm, and brightness
      POST /set/alarm      — body: hour=<0-23>&minute=<0-59>
+     POST /set/alarm-sound — body: value=<0-(count-1)>
      POST /set/brightness — body: value=<0-7>                             */
 void webinterface_initiate(
     ClockTime *clockTime,
@@ -21,6 +22,7 @@ void webinterface_initiate(
     LocalTime *bangkokTime,
     uint8_t   *alarmHour,
     uint8_t   *alarmMinute,
+    uint8_t   *alarmSound,
     uint8_t   *brightness,
     Display   *display1,
     Display   *display2,

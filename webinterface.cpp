@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <WebServer.h>
 
+#include "audio.h"
+
 #define WEBINTERFACE_PORT 80
 
 static WebServer server(WEBINTERFACE_PORT);
@@ -16,6 +18,7 @@ static LocalTime *s_houston     = nullptr;
 static LocalTime *s_bangkok     = nullptr;
 static uint8_t   *s_alarmHour   = nullptr;
 static uint8_t   *s_alarmMinute = nullptr;
+static uint8_t   *s_alarmSound  = nullptr;
 static uint8_t   *s_brightness  = nullptr;
 static Display   *s_display1    = nullptr;
 static Display   *s_display2    = nullptr;
@@ -59,6 +62,15 @@ button:hover{background:#005fa3}
     <button onclick="setAlarm()">Set</button>
     <span id="msg"></span>
   </div>
+  <div class="row" style="margin-top:.75rem">
+    <label>Sound</label>
+    <select id="as">
+      <option value="0">Beep</option>
+      <option value="1">Two Tone</option>
+      <option value="2">Siren</option>
+    </select>
+    <button onclick="setAlarmSound()">Set</button>
+  </div>
 </div>
 <div class="card">
   <h2>Brightness</h2>
@@ -79,6 +91,7 @@ function update(){
     document.getElementById('it').textContent=d.iceland.available?p(d.iceland.hour)+':'+p(d.iceland.minute):'--:--';
     if(ae!=='ah')document.getElementById('ah').value=d.alarm.hour;
     if(ae!=='am')document.getElementById('am').value=d.alarm.minute;
+    if(ae!=='as')document.getElementById('as').value=String(d.alarm.sound);
     if(ae!=='br'){document.getElementById('br').value=d.brightness;document.getElementById('bv').textContent=d.brightness;}
   }).catch(function(){});}
 document.getElementById('br').oninput=function(){document.getElementById('bv').textContent=this.value;};
@@ -87,6 +100,11 @@ function setAlarm(){
   var m=parseInt(document.getElementById('am').value,10);
   if(isNaN(h)||isNaN(m)||h<0||h>23||m<0||m>59){flash(false);return;}
   fetch('/set/alarm',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'hour='+h+'&minute='+m})
+    .then(function(r){flash(r.ok);}).catch(function(){flash(false);});}
+function setAlarmSound(){
+  var v=parseInt(document.getElementById('as').value,10);
+  if(isNaN(v)||v<0){flash(false);return;}
+  fetch('/set/alarm-sound',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'value='+v})
     .then(function(r){flash(r.ok);}).catch(function(){flash(false);});}
 function setBrightness(){
   var v=parseInt(document.getElementById('br').value,10);
@@ -115,18 +133,20 @@ static void handleStatus() {
   const uint8_t ih = s_iceland->isAvailable ? s_iceland->hour   : 0;
   const uint8_t im = s_iceland->isAvailable ? s_iceland->minute : 0;
 
-  char buf[300];
+  char buf[360];
   snprintf(buf, sizeof(buf),
     "{\"houston\":{\"hour\":%u,\"minute\":%u,\"available\":%s},"
     "\"bangkok\":{\"hour\":%u,\"minute\":%u,\"available\":%s},"
     "\"iceland\":{\"hour\":%u,\"minute\":%u,\"available\":%s},"
-    "\"alarm\":{\"hour\":%u,\"minute\":%u},"
+    "\"alarm\":{\"hour\":%u,\"minute\":%u,\"sound\":%u,\"soundCount\":%u},"
     "\"brightness\":%u}",
     hh, hm, s_houston->isAvailable ? "true" : "false",
     bh, bm, s_bangkok->isAvailable ? "true" : "false",
     ih, im, s_iceland->isAvailable ? "true" : "false",
     static_cast<unsigned>(*s_alarmHour),
     static_cast<unsigned>(*s_alarmMinute),
+    static_cast<unsigned>(*s_alarmSound),
+    static_cast<unsigned>(audio_get_sound_count()),
     static_cast<unsigned>(*s_brightness));
 
   server.sendHeader("Cache-Control", "no-store");
@@ -152,6 +172,27 @@ static void handleSetAlarm() {
 
   *s_alarmHour   = static_cast<uint8_t>(h);
   *s_alarmMinute = static_cast<uint8_t>(m);
+  server.send(204, "text/plain", "");
+}
+
+/* Accepts an alarm sound id from a form POST and updates shared state.
+   Responds 204 on success, 400 on invalid input. */
+static void handleSetAlarmSound() {
+  if (!server.hasArg("value")) {
+    server.send(400, "text/plain", "Bad Request");
+    return;
+  }
+
+  const int v = server.arg("value").toInt();
+  const int maxSound = static_cast<int>(audio_get_sound_count()) - 1;
+
+  if (v < 0 || v > maxSound) {
+    server.send(400, "text/plain", "Bad Request");
+    return;
+  }
+
+  *s_alarmSound = static_cast<uint8_t>(v);
+  audio_set_sound(*s_alarmSound);
   server.send(204, "text/plain", "");
 }
 
@@ -193,6 +234,7 @@ void webinterface_initiate(
     LocalTime *bangkokTime,
     uint8_t   *alarmHour,
     uint8_t   *alarmMinute,
+  uint8_t   *alarmSound,
     uint8_t   *brightness,
     Display   *display1,
     Display   *display2,
@@ -204,6 +246,7 @@ void webinterface_initiate(
   s_bangkok     = bangkokTime;
   s_alarmHour   = alarmHour;
   s_alarmMinute = alarmMinute;
+  s_alarmSound  = alarmSound;
   s_brightness  = brightness;
   s_display1    = display1;
   s_display2    = display2;
@@ -212,6 +255,7 @@ void webinterface_initiate(
   server.on("/",               HTTP_GET,  handleRoot);
   server.on("/status",         HTTP_GET,  handleStatus);
   server.on("/set/alarm",      HTTP_POST, handleSetAlarm);
+  server.on("/set/alarm-sound",HTTP_POST, handleSetAlarmSound);
   server.on("/set/brightness", HTTP_POST, handleSetBrightness);
   server.onNotFound(handleNotFound);
 

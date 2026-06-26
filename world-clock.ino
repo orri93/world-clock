@@ -1,7 +1,7 @@
 #include <Arduino.h>
 
-#define SUPPORT_DS3231
-//#define SUPPORT_DS3232
+//#define SUPPORT_DS3231
+#define SUPPORT_DS3232
 #define SUPPORT_ROTARY_ENCODER
 #define SUPPORT_WEB_INTERFACE
 
@@ -37,6 +37,7 @@
 #include "types.h"
 #include "mode.h"
 #include "statusled.h"
+#include "audio.h"
 #ifdef SUPPORT_WEB_INTERFACE
 #include "webinterface.h"
 #endif
@@ -46,6 +47,7 @@
 /* Interval definitions */
 #define INTERVAL_WIFI_CONNECT  5000
 #define INTERVAL_DISPLAY        100
+#define INTERVAL_ALARM_CHECK    200
 
 /* ESP32-WROOM-32 I2C Pins
 
@@ -74,7 +76,7 @@
          GPIO 17 | DISPLAY 2 DIO
          GPIO 18 | DISPLAY 3 CLK
          GPIO 19 | DISPLAY 3 DIO
-         GPIO 23 | Rotary  CLK
+         GPIO 15 | Rotary  CLK
          GPIO 32 | Rotary  DIO
          GPIO 33 | Rotary  SW
          GPIO 25 | DAC Audio
@@ -96,7 +98,7 @@
          GPIO 17 | DISPLAY 2 DIO
          GPIO 18 | DISPLAY 3 CLK
          GPIO 19 | DISPLAY 3 DIO
-         GPIO 23 | Rotary  CLK
+         GPIO 15 | Rotary  CLK
          GPIO 32 | Rotary  DIO
          GPIO 33 | Rotary  SW
          GPIO 25 | DAC Audio
@@ -113,16 +115,19 @@
 #define PIN_DISPLAY_3_DIO 19
 
 /* Rotary encoder pins */
-#define PIN_ROTARY_CLK    23
+#define PIN_ROTARY_CLK    15
 #define PIN_ROTARY_DT     32
 #define PIN_ROTARY_SW     33
 
 /* DAC Audio output pin */
 #define PIN_DAC_AUDIO     25
 
+/* RTC alarm interrupt pin (INT/SQW on DS3232). */
+#define PIN_RTC_ALARM_INT 27
+
 /* Status and error LED pins */
-#define PIN_STATUS_LED    26
-#define PIN_ERROR_LED     4
+#define PIN_STATUS_LED    4
+#define PIN_ERROR_LED     26
 
 /* Serial Speed (if undefined no serial output will be generated) */
 #define SERIAL_BAUD 115200
@@ -142,6 +147,7 @@
 /* Tick instances */
 ::gos::atl::Tick<> tick_wifi_connect(INTERVAL_WIFI_CONNECT);
 ::gos::atl::Tick<> tick_display(INTERVAL_DISPLAY);
+::gos::atl::Tick<> tick_alarm_check(INTERVAL_ALARM_CHECK);
 
 #ifdef SUPPORT_DS3231
 /* RTC instance */
@@ -159,6 +165,12 @@ static Mode currentMode = Mode::ShowHourMinutes;
    rotary encoder and the web interface (whichever features are enabled). */
 static uint8_t brightness = 7, lastReportedBrightness = 7;
 static uint8_t alarmHour = 7, alarmMinute = 0, lastReportedAlarmHour = 7, lastReportedAlarmMinute = 0;
+static uint8_t alarmSound = ALARM_SOUND_BEEP, lastReportedAlarmSound = ALARM_SOUND_BEEP;
+static int32_t lastAlarmTriggerEpochMinute = -1;
+
+#ifdef SUPPORT_DS3232
+volatile bool rtcAlarmInterruptPending = false;
+#endif
 
 #ifdef SUPPORT_ROTARY_ENCODER
 static RotaryEncoder *rotaryencoder = nullptr;
@@ -185,10 +197,17 @@ unsigned int wifi_status = CONNECTION_STATUS_UNKNOWN;
 #ifdef SUPPORT_ROTARY_ENCODER
 IRAM_ATTR void encoderPositionChanged();
 #endif
+#ifdef SUPPORT_DS3232
+IRAM_ATTR void rtcAlarmInterruptFired();
+static void configure_ds3232_alarm();
+#endif
 
 /* SNTP callback function */
 static void time_sync_available(struct timeval *tv);
 static void initialize_sntp_if_needed();
+
+static void start_alarm_playback();
+static void check_alarm_trigger();
 
 static bool is_rtc_available = false;
 static bool is_sntp_initialized = false;
@@ -218,6 +237,9 @@ void setup() {
 
   status_led_begin(PIN_STATUS_LED, PIN_ERROR_LED);
 
+  audio_initialize(PIN_DAC_AUDIO);
+  audio_set_sound(alarmSound);
+
   /* Initialize the displays */
   display_1.initiate();
   display_2.initiate();
@@ -242,6 +264,12 @@ void setup() {
       serial_debug_rtc_not_connected();
 #endif
   }
+#endif
+
+#ifdef SUPPORT_DS3232
+  pinMode(PIN_RTC_ALARM_INT, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(PIN_RTC_ALARM_INT), rtcAlarmInterruptFired, FALLING);
+  configure_ds3232_alarm();
 #endif
 
 #ifdef SERIAL_BAUD
@@ -298,7 +326,7 @@ void setup() {
   webinterface_initiate(
     &currentTime,
     &icelandLocalTime, &houstonLocalTime, &bangkokLocalTime,
-    &alarmHour, &alarmMinute,
+    &alarmHour, &alarmMinute, &alarmSound,
     &brightness,
     &display_1, &display_2, &display_3);
 #ifdef SERIAL_BAUD
@@ -333,6 +361,10 @@ void loop() {
     buttonStableState = buttonRawState;
 
     if (buttonStableState == LOW) {
+      if (audio_is_playing()) {
+        audio_stop_alarm();
+      }
+
       currentMode = static_cast<Mode>((currentMode + 1) % ModeCount);
 #ifdef SERIAL_BAUD
       serial_debug_mode_changed(currentMode);
@@ -344,6 +376,8 @@ void loop() {
         rotaryencoder->setPosition(alarmHour);
       } else if (currentMode == SetAlarmMinute) {
         rotaryencoder->setPosition(alarmMinute);
+      } else if (currentMode == SetAlarmSound) {
+        rotaryencoder->setPosition(alarmSound);
       }
     }
   }
@@ -379,6 +413,9 @@ void loop() {
 #ifdef SERIAL_BAUD
         serial_debug_alarm_changed(alarmHour, alarmMinute);
 #endif
+#ifdef SUPPORT_DS3232
+        configure_ds3232_alarm();
+#endif
       }
       break;
     }
@@ -393,6 +430,26 @@ void loop() {
         lastReportedAlarmMinute = alarmMinute;
 #ifdef SERIAL_BAUD
         serial_debug_alarm_changed(alarmHour, alarmMinute);
+#endif
+#ifdef SUPPORT_DS3232
+        configure_ds3232_alarm();
+#endif
+      }
+      break;
+    }
+
+    case SetAlarmSound: {
+      const int maxSoundId = static_cast<int>(audio_get_sound_count()) - 1;
+      int rawPosition = rotaryencoder->getPosition();
+      alarmSound = static_cast<uint8_t>(constrain(rawPosition, 0, maxSoundId));
+      if (rawPosition != static_cast<int>(alarmSound)) {
+        rotaryencoder->setPosition(alarmSound);
+      }
+      if (alarmSound != lastReportedAlarmSound) {
+        lastReportedAlarmSound = alarmSound;
+        audio_set_sound(alarmSound);
+#ifdef SERIAL_BAUD
+        serial_debug_alarm_sound_changed(alarmSound);
 #endif
       }
       break;
@@ -434,6 +491,11 @@ void loop() {
     hardware_problem_detected,
     last_wifi_connect_attempt_ms);
 
+  if (tick_alarm_check.is(current)) {
+    check_alarm_trigger();
+  }
+  audio_update();
+
   /* Update the Displays */
   if (tick_display.is(current)) {
 
@@ -450,6 +512,13 @@ void loop() {
       case SetAlarmMinute:
         display_1.showAlarm(alarmHour, alarmMinute);
         // Indicate that alarm is being set on displays 2 and 3
+        display_2.showUnavailable();
+        display_3.showUnavailable();
+        break;
+
+      case SetAlarmSound:
+        display_1.showNumber(static_cast<uint16_t>(alarmSound));
+        // Show sound-id only on display 1.
         display_2.showUnavailable();
         display_3.showUnavailable();
         break;
@@ -522,6 +591,24 @@ IRAM_ATTR void encoderPositionChanged() {
 }
 #endif
 
+#ifdef SUPPORT_DS3232
+IRAM_ATTR void rtcAlarmInterruptFired() {
+  rtcAlarmInterruptPending = true;
+}
+
+static void configure_ds3232_alarm() {
+  if (!is_rtc_available) {
+    return;
+  }
+
+  rtc.enableAlarmPin();
+  rtc.disableAlarm1();
+  rtc.clearAlarm1();
+  rtc.setAlarm1(alarmHour, alarmMinute, 0);
+  rtc.enableAlarm1();
+}
+#endif
+
 /* SNTP callback: invoked by the ESP32 SNTP library when a new time is received from an
    NTP server. Updates the global epoch and writes the new time back to the RTC so that
    the RTC stays accurate even across reboots without network access. */
@@ -535,9 +622,55 @@ void time_sync_available(struct timeval *tv) {
       rtc.setEpoch(currentTime.epochUtc);
     }
 #endif
+#ifdef SUPPORT_DS3232
+    configure_ds3232_alarm();
+#endif
 #ifdef SERIAL_BAUD
     serial_debug_time_synced(currentTime);
 #endif
+  }
+}
+
+static void start_alarm_playback() {
+  if (refresh_current_time_from_rtc()) {
+    lastAlarmTriggerEpochMinute = static_cast<int32_t>(currentTime.epochUtc / 60UL);
+  }
+
+  audio_set_sound(alarmSound);
+  audio_start_alarm();
+#ifdef SERIAL_BAUD
+  serial_debug_alarm_triggered(alarmHour, alarmMinute, alarmSound);
+#endif
+}
+
+static void check_alarm_trigger() {
+#ifdef SUPPORT_DS3232
+  bool interruptPending = false;
+  noInterrupts();
+  interruptPending = rtcAlarmInterruptPending;
+  rtcAlarmInterruptPending = false;
+  interrupts();
+
+  if (interruptPending) {
+    start_alarm_playback();
+    configure_ds3232_alarm();
+    return;
+  }
+#endif
+
+  if (!refresh_current_time_from_rtc()) {
+    return;
+  }
+
+  const LocalTime alarmLocal = convertUtcToLocal(currentTime.epochUtc, TIMEZONE_HOUSTON);
+  if (!alarmLocal.isAvailable) {
+    return;
+  }
+
+  const int32_t epochMinute = static_cast<int32_t>(currentTime.epochUtc / 60UL);
+  if (alarmLocal.hour == alarmHour && alarmLocal.minute == alarmMinute && epochMinute != lastAlarmTriggerEpochMinute) {
+    lastAlarmTriggerEpochMinute = epochMinute;
+    start_alarm_playback();
   }
 }
 

@@ -130,6 +130,9 @@ void serial_debug_mode_changed(Mode mode) {
     case SetAlarmMinute:
       Serial.println("Set Alarm Minute");
       break;
+    case SetAlarmSound:
+      Serial.println("Set Alarm Sound");
+      break;
     case SetBrightness:
       Serial.println("Set Brightness");
       break;
@@ -156,4 +159,22 @@ void serial_debug_alarm_changed(uint8_t hour, uint8_t minute) {
   Serial.print(":");
   if (minute < 10) Serial.print("0");
   Serial.println(minute);
+}
+
+void serial_debug_alarm_sound_changed(uint8_t soundId) {
+  printPrefix("[INFO]");
+  Serial.print("Alarm sound changed to ID: ");
+  Serial.println(soundId);
+}
+
+void serial_debug_alarm_triggered(uint8_t hour, uint8_t minute, uint8_t soundId) {
+  printPrefix("[WARN]");
+  Serial.print("Alarm triggered at ");
+  if (hour < 10) Serial.print("0");
+  Serial.print(hour);
+  Serial.print(":");
+  if (minute < 10) Serial.print("0");
+  Serial.print(minute);
+  Serial.print(", sound ID=");
+  Serial.println(soundId);
 }
